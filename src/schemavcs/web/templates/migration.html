@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="explain">
+  <h2>Generate the migration</h2>
+  <p>
+    The migration is the difference between what is <strong>deployed</strong> and what you
+    want — not a rendering of the last merge. One dialect-neutral plan is computed, then
+    rendered per engine: statement order, temp names for rename swaps and per-step safety
+    are decided once, in the engine.
+  </p>
+  <p class="try">
+    Try: <a href="/w/{{ ws }}/migration?deployed=main&amp;target=rename-email&amp;dialect=postgres">main → rename-email</a>
+    in <code>postgres</code>, then switch the dialect to <code>mysql</code> and watch the
+    same plan come out differently. A migration that destroys data will not hand over the
+    SQL until you say so.
+  </p>
+</div>
+
+<div class="panel">
+  <form class="inline" method="get" action="/w/{{ ws }}/migration">
+    <span>deployed</span>
+    <select name="deployed" class="sm">
+      {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == deployed }}>{{ b }}</option>{% endfor %}
+    </select>
+    <span>target</span>
+    <select name="target" class="sm">
+      {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == target }}>{{ b }}</option>{% endfor %}
+    </select>
+    <select name="dialect" class="sm">
+      {% for d in dialects %}<option value="{{ d }}" {{ 'selected' if d == dialect }}>{{ d }}</option>{% endfor %}
+    </select>
+    <button type="submit">Generate</button>
+  </form>
+</div>
+
+{% if needs_ack %}
+  <div class="panel warn">
+    <h3>This migration destroys data</h3>
+    <ul class="changes">
+      {% for d in destructive %}<li><span class="tag drop">destructive</span><code>{{ d }}</code></li>{% endfor %}
+    </ul>
+    <p class="lede">The SQL is withheld until that is acknowledged — the engine refuses to
+      hand over a destructive plan by default rather than trusting a caller to check.</p>
+    <form method="get" action="/w/{{ ws }}/migration">
+      <input type="hidden" name="deployed" value="{{ deployed }}">
+      <input type="hidden" name="target" value="{{ target }}">
+      <input type="hidden" name="dialect" value="{{ dialect }}">
+      <input type="hidden" name="acknowledge" value="true">
+      <button class="danger" type="submit">I understand — show the SQL</button>
+    </form>
+  </div>
+{% endif %}
+
+{% if plan is not none %}
+  {% if not plan %}
+  <div class="panel"><p class="empty">
+    Nothing to do — <code>{{ deployed }}</code> already matches <code>{{ target }}</code>.
+  </p></div>
+  {% else %}
+  <div class="panel">
+    <h3>{{ plan|length }} operation{{ '' if plan|length == 1 else 's' }}, in execution order</h3>
+    {% for o in plan %}
+    <div class="op">
+      <span class="mono">{{ o.describe }}</span>
+      {% if o.requires_cast %}<span class="pill lock_heavy">needs cast</span>{% endif %}
+      {% if o.temp %}<span class="pill safe">temp name</span>{% endif %}
+      <span class="pill {{ o.safety }}" title="{{ o.safety_why }}">{{ o.safety_word }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if sql %}
+  <div class="panel">
+    <h3>{{ dialect }}</h3>
+    <pre class="sql">{{ sql }}</pre>
+  </div>
+  {% endif %}
+  {% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}schemavcs — version control for database schemas{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<header>
+  <a class="brand" href="/"><span class="dot"></span>schemavcs</a>
+  <span class="tagline">branch, diff and merge <strong>database schemas</strong> the way git handles source</span>
+  {% if ws %}
+  <div class="header-actions">
+    <a href="/start">Use my own schema</a>
+    <form method="post" action="/reset">
+      <button class="ghost sm" type="submit">Start over</button>
+    </form>
+  </div>
+  {% endif %}
+</header>
+
+{% if tour %}
+<!-- The rail *is* the navigation. Numbered because the demo is a story with an order,
+     and a reviewer with no context needs to be told where to start. -->
+<nav class="rail" aria-label="Guided tour">
+  {% for s in tour %}
+  <a class="step {{ 'on' if s.key == page or (page == 'branch' and s.key == 'branches' and branch != 'main') }}"
+     href="{{ s.href }}">
+    <span class="n">{{ loop.index }}</span>
+    <span class="t">{{ s.title }}</span>
+    <span class="b">{{ s.blurb }}</span>
+  </a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+<main>
+  {% if error %}<div class="flash error"><pre>{{ error }}</pre></div>{% endif %}
+  {% if notice %}<div class="flash notice">{{ notice }}</div>{% endif %}
+  {% block body %}{% endblock %}
+</main>
+
+<footer>
+  A rename here is <em>same id, new name</em> — not a drop plus an add. That is why one
+  engineer can rename a column while another changes its type, and both survive the merge.
+  Row data is out of scope: the artifact under version control is the schema.
+</footer>
+</body>
+</html>

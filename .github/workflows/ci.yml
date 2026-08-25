@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    name: unit + property tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: make install
+      - run: make test
+
+  live:
+    name: generated DDL against real engines
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: schemavcs_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      mysql:
+        # 8.0 explicitly: `lower_case_table_names` can only be set at server init,
+        # and the Linux default (0) differs from the macOS default (2). Pinning the
+        # image keeps CI and the documented behaviour in agreement (P-34b).
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: schemavcs_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      SCHEMAVCS_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/schemavcs_test
+      SCHEMAVCS_MYSQL_URL: mysql://root@127.0.0.1:3306/schemavcs_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: make install
+      - run: make test-engine

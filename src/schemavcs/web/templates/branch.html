@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+{% block title %}{{ branch }} — schemavcs{% endblock %}
+{% block body %}
+
+{% if welcome %}
+<div class="hero">
+  <span class="kicker">Live demo · nothing to install</span>
+  <h1>A rename is not a drop plus an add.</h1>
+  <p>
+    Every table, column, index and constraint here carries a stable identity. So one
+    engineer can rename <code>users.email</code> while another changes its type, and
+    both changes survive the merge — which a tool comparing two <code>.sql</code> files
+    cannot express at all.
+  </p>
+  <p class="lede">
+    Below is <code>main</code>. Four other branches already hold divergent work, so
+    there is something to merge on arrival. Walk the five steps above, or edit anything —
+    every change is a commit.
+  </p>
+</div>
+{% else %}
+<div class="explain">
+  <h2>Branch <code>{{ branch }}</code></h2>
+  <p>
+    The schema as this branch sees it. Each edit below writes a commit — there is no save
+    button, and the history on the right is real.
+    {% if drift %}
+    This branch is <strong>{{ drift }} change{{ '' if drift == 1 else 's' }}</strong> away
+    from <code>main</code> —
+    <a href="/w/{{ ws }}/compare?base=main&amp;target={{ branch }}">see the diff</a>.
+    {% elif drift == 0 %}
+    It is currently identical to <code>main</code>.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
+<div class="panel">
+  <div class="inline">
+    <strong>Branch</strong>
+    <!-- A plain <select> that navigates. There is no form to submit because switching
+         branches is a read, not a change -- the URL is the state. -->
+    <select class="sm" data-navigate="/w/{{ ws }}/branch/">
+      {% for b in branches %}
+      <option value="{{ b }}" {{ 'selected' if b == branch }}>{{ b }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <details class="editor">
+    <summary>New branch from {{ branch }}</summary>
+    <form class="inline" method="post" action="/w/{{ ws }}/branches">
+      <input type="hidden" name="source" value="{{ branch }}">
+      <input type="text" class="sm" name="name" placeholder="branch name" required>
+      <button type="submit">Create branch</button>
+    </form>
+  </details>
+</div>
+
+{% macro type_picker(selected='', params='', required=False) %}
+          <label class="field"><span>Type</span>
+            <select name="type_base" class="typebase"
+                    data-sizes="{{ type_params.keys()|join(',') }}"
+                    {{ 'required' if required }}>
+              {% if not required %}{% endif %}
+              {% for t in types %}
+              <option value="{{ t }}" {{ 'selected' if t == selected }}>{{ t }}</option>
+              {% endfor %}
+            </select></label>
+          <label class="field typesize"><span>Size</span>
+            <input type="text" name="type_params" value="{{ params }}"
+                   placeholder="255"></label>
+          {% endmacro %}
+
+<div class="cols">
+  <div>
+    {% for t in tables %}
+    <div class="panel" id="t-{{ t.name }}">
+      <div class="table-head">
+        <h3>{{ t.name }}</h3>
+        <span class="count">{{ t.columns|length }} column{{ '' if t.columns|length == 1 else 's' }}</span>
+      </div>
+
+      <table class="schema">
+        {% for c in t.columns %}
+        <tr>
+          <td class="name">{{ c.name }}
+            {% for b in c.badges %}<span class="badge {{ b|lower }}">{{ b }}</span>{% endfor %}
+          </td>
+          <td class="type">{{ c.type }}</td>
+          <td class="flags">
+            {% if not c.nullable %}NOT NULL{% endif %}
+            {% if c.default %} DEFAULT {{ c.default }}{% endif %}
+          </td>
+          <td class="act">
+            <!-- One disclosure per column, holding one form. Everything about a column
+                 lives next to the column, which is the whole point (D49). -->
+            <details class="editor col">
+              <summary>edit</summary>
+              <form method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit">
+                <input type="hidden" name="op" value="alter_column">
+                <input type="hidden" name="path" value="{{ t.name }}.{{ c.name }}">
+                <input type="hidden" name="nullable_field" value="1">
+                <div class="grid">
+                  <label class="field"><span>Name</span>
+                    <input type="text" name="name" value="{{ c.name }}"></label>
+                  {{ type_picker(c.base_type, c.type_params) }}
+                  <label class="field"><span>Default</span>
+                    <input type="text" name="default" value="{{ c.default or '' }}"
+                           placeholder="none"></label>
+                  <div>
+                    <div class="checkbox">
+                      <input type="checkbox" name="nullable" id="n-{{ c.id }}"
+                             {{ 'checked' if c.nullable }}>
+                      <label for="n-{{ c.id }}">Allow NULLs</label>
+                    </div>
+                    <button class="flush" type="submit">Save column</button>
+                  </div>
+                </div>
+              </form>
+              <form method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit"
+                    class="inline flush"
+                    data-confirm="Drop {{ t.name }}.{{ c.name }}? Its data goes with it.">
+                <input type="hidden" name="op" value="drop_column">
+                <input type="hidden" name="path" value="{{ t.name }}.{{ c.name }}">
+                <button class="danger sm" type="submit">Drop this column</button>
+              </form>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      {% if t.constraints or t.indexes %}
+      <div class="sub">
+        {% for c in t.constraints %}
+        <div class="row"><span class="k">{{ c.kind }}</span>
+          <span class="v">{{ c.name }}</span><span>{{ c.detail }}</span></div>
+        {% endfor %}
+        {% for i in t.indexes %}
+        <div class="row"><span class="k">{{ 'unique index' if i.unique else 'index' }}</span>
+          <span class="v">{{ i.name }}</span>
+          <span>({{ i.columns }}){% if i.where %} WHERE {{ i.where }}{% endif %}</span></div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <details class="editor" {{ 'open' if open_table == t.name }}>
+        <summary>Add to <code>{{ t.name }}</code></summary>
+
+        <!-- Four groups, one visible at a time. Radios rather than JavaScript: the CSP
+             forbids inline script, and a tab strip does not need a framework. -->
+        <div class="tabs">
+          {% for key, label in [('col', 'Column'), ('idx', 'Index'),
+                                ('con', 'Constraint'), ('tbl', 'Table')] %}
+          <input type="radio" name="tab-{{ t.id }}" id="tab-{{ key }}-{{ t.id }}"
+                 class="tabradio r-{{ key }}" {{ 'checked' if loop.first }}>
+          <label class="tab" for="tab-{{ key }}-{{ t.id }}">{{ label }}</label>
+          {% endfor %}
+
+          {% macro op(name) %}
+          <form method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit">
+            <input type="hidden" name="op" value="{{ name }}">
+            <input type="hidden" name="table" value="{{ t.name }}">
+            {{ caller() }}
+          </form>
+          {% endmacro %}
+
+          <div class="tabpane pane-col">
+            {% call op('add_column') %}
+            <div class="grid">
+              <label class="field"><span>Column name</span>
+                <input type="text" name="name" placeholder="phone" required></label>
+              {{ type_picker('varchar', '', required=True) }}
+              <label class="field"><span>Default</span>
+                <input type="text" name="default" placeholder="optional"></label>
+              <div>
+                <div class="checkbox">
+                  <input type="checkbox" name="not_null" id="nn-{{ t.id }}">
+                  <label for="nn-{{ t.id }}">NOT NULL</label>
+                </div>
+                <button class="flush" type="submit">Add column</button>
+              </div>
+            </div>
+            {% endcall %}
+            <p class="try">
+              Every type {{ dialect }} can express is in that list. Size applies to
+              {{ type_params.keys()|join(', ') }} — <code>decimal</code> takes two,
+              like <code>10,2</code>.
+            </p>
+          </div>
+
+          <div class="tabpane pane-idx">
+            {% call op('add_index') %}
+            <div class="grid">
+              <label class="field"><span>Index name</span>
+                <input type="text" name="name" placeholder="{{ t.name }}_by_x" required></label>
+              <label class="field"><span>Columns, in order</span>
+                <input type="text" name="columns" placeholder="a, b" required></label>
+              <label class="field"><span>WHERE (partial index)</span>
+                <input type="text" name="where" placeholder="optional"></label>
+              <div>
+                <div class="checkbox">
+                  <input type="checkbox" name="unique" id="uq-{{ t.id }}">
+                  <label for="uq-{{ t.id }}">UNIQUE</label>
+                </div>
+                <button class="flush" type="submit">Create index</button>
+              </div>
+            </div>
+            {% endcall %}
+            {% if t.indexes %}
+            <form method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit"
+                  class="inline flush">
+              <input type="hidden" name="op" value="drop_index">
+              <select name="path" class="sm">
+                {% for i in t.indexes %}
+                <option value="{{ t.name }}.{{ i.name }}">{{ i.name }}</option>{% endfor %}
+              </select>
+              <button class="danger" type="submit">Drop index</button>
+            </form>
+            {% endif %}
+          </div>
+
+          <div class="tabpane pane-con">
+            {% call op('add_fk') %}
+            <div class="grid">
+              <label class="field"><span>Foreign key name</span>
+                <input type="text" name="name" placeholder="{{ t.name }}_x_fk" required></label>
+              <label class="field"><span>Columns</span>
+                <input type="text" name="columns" required></label>
+              <label class="field"><span>References</span>
+                <select name="ref_table">
+                  {% for n in table_names %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
+                </select></label>
+              <label class="field"><span>Its columns</span>
+                <input type="text" name="ref_columns" placeholder="id" required></label>
+              <div><button type="submit">Add foreign key</button></div>
+            </div>
+            {% endcall %}
+            {% call op('add_unique') %}
+            <div class="grid">
+              <label class="field"><span>Unique constraint</span>
+                <input type="text" name="name" required></label>
+              <label class="field"><span>Columns</span>
+                <input type="text" name="columns" required></label>
+              <div><button type="submit">Add unique</button></div>
+            </div>
+            {% endcall %}
+            {% call op('add_check') %}
+            <div class="grid">
+              <label class="field"><span>Check constraint</span>
+                <input type="text" name="name" required></label>
+              <label class="field"><span>Expression</span>
+                <input type="text" name="expression" placeholder="total &gt;= 0" required></label>
+              <label class="field"><span>Columns it reads</span>
+                <input type="text" name="columns" placeholder="total"></label>
+              <div><button type="submit">Add check</button></div>
+            </div>
+            {% endcall %}
+            {% if t.constraints %}
+            <form method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit"
+                  class="inline flush">
+              <input type="hidden" name="op" value="drop_constraint">
+              <select name="path" class="sm">
+                {% for c in t.constraints %}
+                <option value="{{ t.name }}.{{ c.name }}">{{ c.name }}</option>{% endfor %}
+              </select>
+              <button class="danger" type="submit">Drop constraint</button>
+            </form>
+            {% endif %}
+          </div>
+
+          <div class="tabpane pane-tbl">
+            {% call op('rename_table') %}
+            <div class="grid">
+              <label class="field"><span>Rename <code>{{ t.name }}</code> to</span>
+                <input type="text" name="new_name" required></label>
+              <div><button type="submit">Rename table</button></div>
+            </div>
+            {% endcall %}
+            <form method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit"
+                  class="inline flush"
+                  data-confirm="Drop table {{ t.name }}? This cannot be undone.">
+              <input type="hidden" name="op" value="drop_table">
+              <input type="hidden" name="table" value="{{ t.name }}">
+              <button class="danger" type="submit">Drop table {{ t.name }}</button>
+            </form>
+          </div>
+        </div>
+      </details>
+    </div>
+    {% else %}
+    <div class="panel"><p class="empty">No tables on this branch yet.</p></div>
+    {% endfor %}
+
+    <div class="panel">
+      <form class="inline" method="post" action="/w/{{ ws }}/branch/{{ branch }}/edit">
+        <input type="hidden" name="op" value="add_table">
+        <input type="text" class="sm" name="name" placeholder="new table name" required>
+        <button type="submit">Create table</button>
+      </form>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h3>History</h3>
+      <ul class="history">
+        {% for c in history %}
+        <li><span class="id">{{ c.id }}</span>
+          <span>{{ c.message or 'no message' }}{% if c.merge %} <em>(merge)</em>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Everything you can do</h3>
+      <div class="ops">
+        {% for group, items in operations %}
+        <div>
+          <h4>{{ group }}</h4>
+          <ul>{% for i in items %}<li>{{ i }}</li>{% endfor %}</ul>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Not supported, on purpose</h3>
+      <p class="lede tight">
+        This tool is the source of truth for the schema, so it reads schema
+        <em>definitions</em> and refuses change scripts — no <code>ALTER</code> input, no
+        importing an existing <code>migrations/</code> folder. Row data is out of scope
+        too. Both are decisions, not gaps.
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}

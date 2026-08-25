@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="explain">
+  <h2>Start from your own schema</h2>
+  <p>
+    Paste <code>CREATE TABLE</code> / <code>CREATE INDEX</code> statements. From that point
+    the schema is edited here and this tool generates the migrations — it deliberately does
+    not read change scripts (<code>ALTER</code>, <code>DROP</code>, <code>RENAME</code>),
+    because a history it did not witness cannot tell a rename from a drop plus an add.
+  </p>
+  <p class="try">
+    Would rather look around first? <a href="/">Open the guided demo</a> — it arrives with
+    branches already diverged and something to merge.
+  </p>
+</div>
+
+<form method="post" action="/new">
+  <div class="panel">
+    <label class="field">
+      <span>Dialect of the DDL you are pasting</span>
+      <select name="dialect" class="sm">
+        {% for d in dialects %}<option value="{{ d }}">{{ d }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Schema definition</span>
+      <textarea name="ddl" spellcheck="false">{{ sample }}</textarea>
+    </label>
+    <button type="submit">Create workspace</button>
+  </div>
+</form>
+
+<p class="lede">
+  Each visitor gets an isolated workspace, so nobody else's branches appear in yours.
+  Nothing here is authenticated — it is a demo, not a place to keep a real schema.
+</p>
+{% endblock %}

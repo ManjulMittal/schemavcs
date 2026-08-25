@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="explain">
+  <h2>Compare any two branches</h2>
+  <p>
+    A <strong>semantic</strong> diff, not a text diff. It reports <em>renamed column</em>
+    because the object on both sides has the same id; a line-based tool comparing two
+    <code>.sql</code> files can only see one column disappear and another appear.
+  </p>
+  <p class="try">
+    Try: <a href="/w/{{ ws }}/compare?base=main&amp;target=rename-email">main → rename-email</a>
+    (a rename, with the attributes that changed listed underneath) ·
+    <a href="/w/{{ ws }}/compare?base=rename-email&amp;target=widen-email">rename-email → widen-email</a>
+    (two engineers' work seen against each other).
+  </p>
+</div>
+
+<div class="panel">
+  <form class="inline" method="get" action="/w/{{ ws }}/compare">
+    <span>from</span>
+    <select name="base" class="sm">
+      {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == base }}>{{ b }}</option>{% endfor %}
+    </select>
+    <span>to</span>
+    <select name="target" class="sm">
+      {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == target }}>{{ b }}</option>{% endfor %}
+    </select>
+    <button type="submit">Compare</button>
+  </form>
+</div>
+
+{% if changes is not none %}
+<div class="panel">
+  {% if changes %}
+  <ul class="changes">
+    {% for c in changes %}
+    <li>
+      <span class="tag {{ c.tone }}">{{ c.word }}</span>
+      <code>{% if c.scope %}{{ c.scope }}.{% endif %}{{ c.subject }}</code>
+      {% for d in c.deltas %}
+      <div class="delta">{{ d.attribute }}: <code>{{ d.before }}</code> → <code>{{ d.after }}</code></div>
+      {% endfor %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">
+    {% if base == target %}Same branch on both sides.{% else %}
+    No differences — <code>{{ base }}</code> and <code>{{ target }}</code> describe the
+    same schema.{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

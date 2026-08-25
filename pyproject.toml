@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "schemavcs"
+version = "0.1.0"
+description = "Version control for database schemas: branch, diff, and merge"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlglot>=25,<31",
+    # The web app is part of the product, not an optional extra, so its dependencies
+    # are not optional either: `pip install -e .` has to produce something runnable.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# Drivers for the live-engine suite only. Deliberately not in `dev`:
+# `make test` must work without them.
+engines = ["PyMySQL>=1.1", "psycopg[binary]>=3.1"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "httpx>=0.27",          # fastapi's TestClient
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Templates and CSS ship with the package. Without this the app runs from a checkout
+# and 500s from an install -- a failure that only appears after deployment.
+[tool.setuptools.package-data]
+schemavcs = ["web/templates/*.html", "web/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "engine: requires a live Postgres/MySQL container (round-trip tests)",
+]

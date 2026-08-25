@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="explain">
+  <h2>Three-way merge, attribute by attribute</h2>
+  <p>
+    Two branches touching the <em>same column</em> merge cleanly as long as they moved
+    different attributes. Only a genuine disagreement about one attribute stops here —
+    and when it does, nothing is written until you choose.
+  </p>
+  <p class="try">
+    Try: <a href="/w/{{ ws }}/merge?ours=rename-email&amp;theirs=widen-email">rename-email ← widen-email</a>
+    — one branch renamed <code>users.email</code>, the other retyped it; both survive.
+    Then <a href="/w/{{ ws }}/merge?ours=nickname-a&amp;theirs=nickname-b">nickname-a ← nickname-b</a>
+    — both retyped <code>users.nickname</code>, which cannot be reconciled automatically.
+  </p>
+</div>
+
+<div class="panel">
+  <form class="inline" method="post" action="/w/{{ ws }}/merge">
+    <span>into</span>
+    <select name="ours" class="sm">
+      {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == ours }}>{{ b }}</option>{% endfor %}
+    </select>
+    <span>merge</span>
+    <select name="theirs" class="sm">
+      {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == theirs }}>{{ b }}</option>{% endfor %}
+    </select>
+    <button type="submit">Merge</button>
+  </form>
+  <p class="lede flush try">
+    “into” receives the merge; “merge” is the branch being brought in. The merge base is
+    computed as the true common ancestor of the two branch histories, not the branch point.
+  </p>
+</div>
+
+{% if result %}
+  {% if result.clean %}
+  <div class="panel">
+    <p>
+      <span class="status clean">{{ result.status.replace('_', ' ') }}</span>
+      {% if result.commit %} committed as <code>{{ result.commit }}</code> on
+      <code>{{ ours }}</code>{% endif %}
+    </p>
+    {% if result.status == 'up_to_date' %}
+    <p class="lede tight"><code>{{ theirs }}</code> is already contained in
+      <code>{{ ours }}</code> — nothing to do.</p>
+    {% elif result.status == 'fast_forward' %}
+    <p class="lede tight"><code>{{ ours }}</code> had not moved since the
+      branch point, so its head simply advanced. No merge commit was needed.</p>
+    {% else %}
+    <p class="lede tight">
+      <a href="/w/{{ ws }}/branch/{{ ours }}">See the merged schema</a> or
+      <a href="/w/{{ ws }}/migration?deployed={{ theirs }}&amp;target={{ ours }}">generate the migration</a>.
+    </p>
+    {% endif %}
+  </div>
+
+  {% elif result.violations %}
+  <div class="panel">
+    <p><span class="status invalid">invalid</span>
+      every change is individually fine; the combination is not.</p>
+    <ul class="changes">
+      {% for v in result.violations %}
+      <li><span class="tag drop">{{ v.invariant }}</span> {{ v.message }}</li>
+      {% endfor %}
+    </ul>
+    <p class="lede flush">
+      Nothing was written. This is not resolvable by picking a side — one of the branches
+      has to change first.
+    </p>
+  </div>
+
+  {% else %}
+  <div class="panel">
+    <p><span class="status dirty">{{ result.conflicts|length }} conflict{{ '' if result.conflicts|length == 1 else 's' }}</span>
+      nothing was written; <code>{{ ours }}</code> is unchanged until you decide.</p>
+  </div>
+
+  <form method="post" action="/w/{{ ws }}/merge">
+    <input type="hidden" name="ours" value="{{ ours }}">
+    <input type="hidden" name="theirs" value="{{ theirs }}">
+    <!-- The token is a hash of the conflict set. If either branch moves while this page
+         is open, it stops matching and the merge is refused rather than applying a
+         decision made about a situation that no longer exists. -->
+    <input type="hidden" name="token" value="{{ result.token }}">
+
+    {% for c in result.conflicts %}
+    <div class="conflict">
+      <h3>{{ c.path }}{% if c.attribute %}.{{ c.attribute }}{% endif %}</h3>
+      <p class="lede flush">{{ c.message }}</p>
+      {% if c.choosable %}
+      <div class="sides">
+        <div class="side base">
+          <div class="k">base</div><div class="v">{{ c.base }}</div>
+        </div>
+        <div class="side pick">
+          <div class="k">{{ ours }} (ours)</div><div class="v">{{ c.ours }}</div>
+          <label><input type="radio" name="resolve:{{ c.key }}" value="ours" required> take this</label>
+        </div>
+        <div class="side pick">
+          <div class="k">{{ theirs }} (theirs)</div><div class="v">{{ c.theirs }}</div>
+          <label><input type="radio" name="resolve:{{ c.key }}" value="theirs"> take this</label>
+        </div>
+      </div>
+      {% else %}
+      <div class="sides">
+        <div class="side pick">
+          <div class="k">{{ ours }} (ours)</div>
+          <label><input type="radio" name="resolve:{{ c.key }}" value="ours" required> keep ours</label>
+        </div>
+        <div class="side pick">
+          <div class="k">{{ theirs }} (theirs)</div>
+          <label><input type="radio" name="resolve:{{ c.key }}" value="theirs"> keep theirs</label>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    <button type="submit">Resolve and merge</button>
+  </form>
+  {% endif %}
+{% endif %}
+{% endblock %}
