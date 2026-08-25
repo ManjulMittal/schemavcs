@@ -6,7 +6,7 @@ backwards produces either spurious diffs or silently broken indexes.
 """
 import pytest
 
-from schemavcs.model import ColumnType, schema
+from schemavcs.model import ColumnType, Index, Snapshot, Table, schema
 
 
 # ------------------------------------------------------------------ identity
@@ -148,3 +148,36 @@ def test_type_equality_is_canonical_not_textual():
     assert ColumnType.parse("varchar(255)") == ColumnType.parse("varchar(255)")
     assert ColumnType.parse("varchar(255)") != ColumnType.parse("varchar(256)")
     assert ColumnType.parse("int") != ColumnType.parse("bigint")
+
+
+# ------------------------------------- fingerprint totality (found by M91 on CI)
+def test_equality_survives_a_snapshot_that_is_malformed():
+    """`__eq__` and `__hash__` must not raise, even on an invalid schema.
+
+    Fingerprints are sorted to make the comparison order-insensitive, and sorting the
+    tuples directly compares them element-wise. Several fields are optional -- an index
+    `where`, a column `default`, a constraint `on_delete` -- so two entries that tie on
+    everything before one of those go on to compare `None` against a string, which is a
+    TypeError rather than an answer.
+
+    That is reachable: a merge may produce an invalid snapshot and report the violations
+    rather than refuse (D11), so equality is asked about malformed schemas by design.
+    Two indexes sharing a name is the smallest way to force the tie.
+    """
+    tie = Table(name="t", indexes=(
+        Index(name="i", columns=(), unique=False, where=None),
+        Index(name="i", columns=(), unique=False, where="x > 0"),
+    ))
+    a, b = Snapshot(tables=(tie,)), Snapshot(tables=(tie,))
+
+    assert a == b                     # must answer, not raise
+    assert hash(a) == hash(b)
+    assert a.content_hash() == b.content_hash()
+
+
+def test_a_none_valued_optional_does_not_collide_with_a_string():
+    """The order-only fix must not make `None` and a string indistinguishable."""
+    unnamed = Table(name="t", indexes=(Index(name="i", where=None),))
+    named = Table(name="t", indexes=(Index(name="i", where="x > 0"),))
+
+    assert Snapshot(tables=(unnamed,)) != Snapshot(tables=(named,))

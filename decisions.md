@@ -400,6 +400,22 @@ directions. Found by the `M-91` commutativity property, not by a hand-written te
 not have thought to check it. Conflicts are *pairs*, and anything derived from a pair has to
 be symmetric or it is not really about the pair.
 
+**`M-91` then found a second, unrelated bug — and only on CI.** Comparing two snapshots
+raised `TypeError: '<' not supported between instances of 'NoneType' and 'str'`. Fingerprints
+are sorted to make the comparison order-insensitive, and sorting the tuples directly compares
+them element-wise; several fields are optional — an index `where`, a column `default`, a
+constraint `on_delete` — so two entries that tie on everything before one of those go on to
+compare `None` against a string. `Snapshot.__eq__` and `__hash__` both route through it, so
+equality was not total.
+
+Two things make this worth recording rather than just fixing. First, it is reachable by
+design: a merge may produce an invalid snapshot and *report* the violations rather than refuse
+(D11 category 5), so equality is asked about malformed schemas as a matter of course, and it
+has to answer instead of crashing. Second, 200 examples on a laptop never generated it and
+200 on a CI runner did, which is the argument for property tests running somewhere other than
+the machine that wrote them. The fix is a total sort order that cannot raise; the regression
+test builds the tie directly, so it no longer depends on Hypothesis rediscovering it.
+
 ---
 
 ## D12 — Conflicts are resolved atomically on one screen; no persisted mid-merge state

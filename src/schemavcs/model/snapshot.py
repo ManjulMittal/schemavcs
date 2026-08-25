@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass, field, replace
 
 from .objects import (UNRESOLVED, Column, Constraint, ConstraintKind, Index,
-                      IndexColumn, Table, new_id)
+                      IndexColumn, Table, _total, new_id)
 from .types import DIALECT_GENERIC, ColumnType
 
 
@@ -129,7 +129,9 @@ class Snapshot:
     # -------------------------------------------------- structural identity
     def fingerprint(self) -> tuple:
         names = self.name_map()
-        return (self.dialect, tuple(sorted(t.fingerprint(names) for t in self.tables)))
+        return (self.dialect,
+                tuple(sorted((t.fingerprint(names) for t in self.tables),
+                             key=_total)))
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Snapshot) and self.fingerprint() == other.fingerprint()

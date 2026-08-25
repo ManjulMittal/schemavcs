@@ -57,6 +57,25 @@ class Column:
         return (self.name, self.type, self.nullable, self.default, self.autoincrement)
 
 
+def _total(fingerprint: tuple) -> str:
+    """A total order over fingerprints that cannot raise.
+
+    Sorting the tuples directly compares them element-wise, and several fields are
+    optional -- a column `default`, an index `where`, a constraint `on_delete`. Two
+    entries that tie on everything before one of those then compare `None` against a
+    string, which is a TypeError. Sorting is only here to make the comparison
+    order-insensitive, so any deterministic total order does the job; the tuples
+    themselves are still what gets compared for equality.
+
+    This matters more than a sort helper usually would, because `fingerprint` backs
+    `Snapshot.__eq__` and `__hash__` -- and those are reachable with an *invalid*
+    snapshot in hand. A merge may legitimately produce one and report the violations
+    (D11), so equality has to survive a schema that is malformed rather than crash on
+    it. Found by a property test, on CI, on an example this laptop never generated.
+    """
+    return repr(fingerprint)
+
+
 @dataclass(frozen=True)
 class IndexColumn:
     """One entry in an index's ordered column list, referenced by column id.
@@ -134,7 +153,7 @@ class Table:
         # and constraints are not.
         return (
             self.name,
-            tuple(sorted(c.fingerprint(names) for c in self.columns)),
-            tuple(sorted(c.fingerprint(names) for c in self.constraints)),
-            tuple(sorted(i.fingerprint(names) for i in self.indexes)),
+            tuple(sorted((c.fingerprint(names) for c in self.columns), key=_total)),
+            tuple(sorted((c.fingerprint(names) for c in self.constraints), key=_total)),
+            tuple(sorted((i.fingerprint(names) for i in self.indexes), key=_total)),
         )
