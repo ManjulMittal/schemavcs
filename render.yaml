@@ -1,0 +1,19 @@
+# Render blueprint. Committing it means the deployment is reproducible from the repo
+# rather than from a sequence of clicks nobody wrote down.
+services:
+  - type: web
+    name: schemavcs
+    runtime: docker
+    plan: free                # 750 instance-hours/month; one service fits inside that
+    dockerfilePath: ./Dockerfile
+
+    # Not "/": the landing route creates a workspace and sets a cookie on every request
+    # (D42/D46), so health checks against it would mint a SQLite file per probe.
+    healthCheckPath: /healthz
+
+    envVars:
+      # Free instances cannot mount a persistent disk, so this is container-local and
+      # is lost on redeploy or spin-down. That is a deliberate fit with per-visitor
+      # throwaway workspaces, not an oversight -- see README, "What is not preserved".
+      - key: SCHEMAVCS_DATA
+        value: /data

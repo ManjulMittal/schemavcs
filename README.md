@@ -12,7 +12,7 @@ cleanly. A name-keyed tool cannot express that at all.
 
 ```bash
 make dev      # creates .venv, installs the package and dev dependencies
-make test     # 412 tests, ~3 seconds, no database required
+make test     # 422 tests, ~3 seconds, no database required
 make serve    # the web app on http://localhost:8000
 ```
 
@@ -121,6 +121,43 @@ one thing this tool exists not to do. Full reasoning, including what it costs, i
 Positioning, plainly: **greenfield-first**. Design a schema here, evolve it here, let the
 tool generate the migrations. It is not an adoption path for a legacy database.
 
+## Deploying
+
+The app is a single container with no database to provision — schemas live in per-visitor
+SQLite files created at runtime.
+
+```bash
+docker build -t schemavcs .
+docker run -p 8000:8000 schemavcs      # http://localhost:8000
+```
+
+On [Render](https://render.com), `render.yaml` is a blueprint: point a new Blueprint
+instance at the repo and it reads the service definition from the file rather than from a
+sequence of dashboard clicks. The free plan needs no credit card and allows 750
+instance-hours a month, which one always-on service fits inside.
+
+Two properties of the free tier shaped the setup, and neither is hidden:
+
+**The first request after idle is slow.** Free services are suspended after 15 minutes of
+inactivity and take about a minute to wake. There is no way around this that does not
+involve self-pinging, which Render treats as abnormal traffic and grounds for suspension —
+a dead link is worse than a slow one. So it is documented instead.
+
+**What is not preserved.** Free instances cannot mount a persistent disk, so `/data` is
+container-local and is lost on redeploy or spin-down. Within the life of an instance
+everything holds: every edit is a commit written to disk immediately (D44), the repo is
+reopened per request, and branches, merges and history survive across requests and across
+workers. What does not survive is the container. A returning visitor whose workspace is
+gone lands on a fresh demo rather than an error.
+
+That is a fit with the design rather than a compromise forced on it — workspaces are
+anonymous, per-visitor and throwaway by decision (D42), so there is nothing here whose loss
+matters. It is also why no managed database is provisioned: a free Postgres would expire 30
+days after creation, which is precisely the wrong property for a link someone else opens.
+
+`/healthz` exists for the platform's health check because `/` is not idempotent — it mints
+a workspace and sets a cookie, so probing it would write a SQLite file per check.
+
 ## Running the live-engine tests
 
 These apply generated DDL to a real Postgres and MySQL. They're skipped by default; the
@@ -175,7 +212,7 @@ src/schemavcs/
               Decides nothing (D45); tokenised design system (D47).
 tests/
   unit/       335 tests, no database
-  web/        69 tests: the HTTP layer (cookies, forms, redirects, staleness,
+  web/        77 tests: the HTTP layer (cookies, forms, redirects, staleness,
               response headers) and the stylesheet's contrast contract
   engine/     generated DDL applied to real Postgres and MySQL
 docs/         scope, and the full test plan behind the test IDs (M-01, E-40, ...)

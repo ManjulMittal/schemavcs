@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -42,6 +42,18 @@ app.add_middleware(SecurityHeaders)
 app.add_exception_handler(Exception, unhandled)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
+
+
+@app.get("/healthz", response_class=PlainTextResponse)
+def healthz() -> str:
+    """Liveness probe for the deployment platform.
+
+    Separate from `/` because `/` is not idempotent: it mints a workspace and sets a
+    cookie (D42), so pointing a health check at it would create a SQLite file every
+    time the platform probed. Returns a fixed string and nothing about the process --
+    a health endpoint is unauthenticated, so version and environment stay out of it.
+    """
+    return "ok"
 
 
 # --------------------------------------------------------------- helpers

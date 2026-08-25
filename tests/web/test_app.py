@@ -655,3 +655,29 @@ def test_W53_editing_a_column_without_touching_its_type_leaves_it_alone(client, 
     assert notice(r.text) == "users.email: rename to contact"
     assert workspaces.open_repo(ws).snapshot("main").col("users.contact").type.render() \
         == "varchar(255)"
+
+
+def test_W54_the_health_check_is_cheap_and_has_no_side_effects(client, data_dir):
+    """The reason /healthz exists rather than pointing the platform at "/".
+
+    "/" mints a workspace and sets a cookie on every request, so using it as a health
+    check would write a SQLite file per probe -- on a free instance with no persistent
+    disk, that is a slow disk-fill driven entirely by the platform's own monitoring.
+    """
+    before = sorted(data_dir.glob("*.db")) if data_dir.exists() else []
+
+    for _ in range(5):
+        r = client.get("/healthz")
+        assert r.status_code == 200
+        assert r.text == "ok"
+
+    after = sorted(data_dir.glob("*.db")) if data_dir.exists() else []
+    assert after == before
+    assert "schemavcs_ws" not in client.cookies
+
+
+def test_W55_the_health_check_says_nothing_about_the_process(client):
+    """It is unauthenticated, so version, paths and environment stay out of it."""
+    body = client.get("/healthz").text
+
+    assert body == "ok"
