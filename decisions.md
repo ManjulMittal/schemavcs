@@ -1535,10 +1535,18 @@ driver refuses to open one against a current Turso backend. `executemany` is not
 12 rows took 3.38s versus 3.90s as separate statements, so there is no round-trip saving
 to have.
 
-**Honest caveat.** These numbers were measured from a laptop to a database in
-`ap-south-1`, and the deployed app will have a different distance to cover. The *counts*
-improve at any latency; the *seconds* will not reproduce. What the numbers are good for is
-the ordering of the three fixes, not their absolute values.
+**Honest caveat, and how it turned out.** These numbers were measured from a laptop to a
+database in `ap-south-1`, and the caveat written at the time was that the seconds would not
+reproduce from the deployed app. They did not — they got *worse*. Measured against the live
+service (Render Singapore, database still in Mumbai): landing 5.1s, branch page 0.96–1.29s,
+compare 0.85s, merge 0.57s, migration 0.82–0.95s, one edit 1.5s. Roughly 1.5–2x the laptop
+figures, because the laptop happened to be closer to Mumbai than Singapore is.
+
+So the remaining cost is not the code, it is the 3,900km between the container and its
+database, and Render's free tier has no region closer. **The fix is to move the database,
+not the app** — a Turso database in `ap-southeast-1` next to the container would make every
+one of these round trips a LAN hop. Left undone rather than unnoticed: it means recreating
+the database and changing the URL, and the app is usable as it stands.
 
 **Cut.** Reducing the branch page below five operations. It needs a request-scoped cache
 for branch heads, which unlike commits are mutable, so it trades a clear correctness

@@ -1,5 +1,13 @@
 # schemavcs — version control for database schemas
 
+**Live: https://schemavcs-gizs.onrender.com**
+
+> Hosted on a free instance, which suspends after 15 minutes of inactivity — the first
+> request may take about a minute to wake it. Everything after that is fast, and nothing
+> is lost while it sleeps: schemas live in a hosted database, not on the container.
+> The link opens onto a working demo with two engineers' work already diverged, not an
+> empty form.
+
 Branch, diff, and merge **database schemas** the way git handles source. Row data is out
 of scope: the artifact under version control is the schema itself.
 
