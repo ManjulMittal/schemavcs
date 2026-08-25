@@ -159,6 +159,11 @@ measurements.
 
 ### On Render
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/ManjulMittal/schemavcs)
+
+That button reads `render.yaml` from this repo and pre-fills the service. It will ask for
+`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, and nothing else.
+
 `render.yaml` is a blueprint: point a new Blueprint instance at the repo and Render reads
 the service definition from the file rather than from a sequence of dashboard clicks. The
 free plan needs no card and allows 750 instance-hours a month, which one always-on service
