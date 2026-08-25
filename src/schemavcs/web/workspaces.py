@@ -54,20 +54,56 @@ def is_valid(ws: str | None) -> bool:
     return bool(ws and WORKSPACE_ID.match(ws))
 
 
-def path_for(ws: str) -> Path:
+#: One database holds every workspace, partitioned by the `workspace` column (D51).
+#: A file per visitor was the earlier shape and does not survive the move to a hosted
+#: database, where "create a file" means "call a provisioning API".
+DB_NAME = "workspaces.db"
+
+
+def _remote() -> tuple[str, str] | None:
+    """Turso connection details, or None to use a local file.
+
+    Read from the environment on every call rather than captured at import: the tests
+    set and unset these, and a module-level constant would freeze whichever happened to
+    be true when the module was first imported. The token is a credential and lives
+    only in the environment -- never in source, and never in a committed config file.
+    """
+    url = os.environ.get("TURSO_DATABASE_URL", "")
+    token = os.environ.get("TURSO_AUTH_TOKEN", "")
+    return (url, token) if url and token else None
+
+
+def store_for(ws: str) -> SqliteStore:
+    """The store for one workspace, local or hosted.
+
+    Validating first is not vestigial now that ids no longer name files: the id still
+    reaches SQL, and while every statement is parameterized, an id that cannot be a
+    workspace should be refused at the boundary rather than queried for.
+    """
     if not is_valid(ws):
         raise ValueError(f"malformed workspace id: {ws!r}")
-    return DATA_DIR / f"{ws}.db"
+    remote = _remote()
+    if remote is not None:
+        return SqliteStore.remote(*remote, workspace=ws)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return SqliteStore(DATA_DIR / DB_NAME, workspace=ws)
 
 
 def exists(ws: str | None) -> bool:
-    return is_valid(ws) and path_for(ws).exists()
+    """A workspace exists once it has a branch. There is no separate registry table --
+    `main` is created by `create()` and never dropped, so its presence is the fact."""
+    if not is_valid(ws):
+        return False
+    if _remote() is None and not (DATA_DIR / DB_NAME).exists():
+        return False
+    with store_for(ws) as store:
+        return bool(store.branch_names())
 
 
 def open_repo(ws: str) -> Repo:
-    """Reopened per request. Cheap (SQLite), and it keeps the web layer stateless --
-    two workers behind one URL see the same repo because the file is the state."""
-    return Repo.open(SqliteStore(path_for(ws)))
+    """Reopened per request. That keeps the web layer stateless -- two workers behind
+    one URL see the same repo because the database is the state, not the process."""
+    return Repo.open(store_for(ws))
 
 
 #: The demo workspace arrives with two engineers' work already diverged. A reviewer who
@@ -110,8 +146,7 @@ def create(ws: str | None = None, ddl: str | None = None, dialect: str = "postgr
     deliberately, so a bad paste never produces a half-built workspace."""
     snapshot = parse_ddl(ddl if ddl and ddl.strip() else SEED_DDL, dialect=dialect)
     ws = ws or new_id()
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    repo = Repo.init("main", store=SqliteStore(path_for(ws)))
+    repo = Repo.init("main", store=store_for(ws))
     repo.commit("main", snapshot, message="initial schema")
     if demo:
         seed_demo(repo)

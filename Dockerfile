@@ -22,8 +22,9 @@ COPY src ./src
 # product, and psycopg[binary] alone is ~30MB of image for code that never executes here.
 RUN pip install --no-cache-dir .
 
-# Workspaces are SQLite files written at runtime (D42). This path is inside the container
-# and deliberately not a mounted volume -- see README, "What is not preserved".
+# Only the fallback. With TURSO_DATABASE_URL and TURSO_AUTH_TOKEN set, schemas live in a
+# hosted database and nothing is written here; without them the app keeps a local SQLite
+# file, which on a free instance does not survive a restart (D9, D51).
 ENV SCHEMAVCS_DATA=/data
 
 # Non-root, and the data directory is chowned before the drop. Doing it after would leave

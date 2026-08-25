@@ -16,14 +16,26 @@ from schemavcs.model import schema
 from schemavcs.storage import SqliteStore
 
 
-@pytest.fixture(params=["memory", "sqlite"])
+@pytest.fixture(params=["memory", "sqlite", "libsql"])
 def store(request, tmp_path):
-    """Both stores, and for SQLite a real file -- because a file is what can be
-    reopened, and reopening is the whole point of the exercise."""
+    """Every store, and for the two durable ones a real file -- because a file is what
+    can be reopened, and reopening is the whole point of the exercise.
+
+    `libsql` is the driver the deployed app uses against Turso, pointed at a local file
+    here so the contract can be checked without a network or a credential. It is worth
+    a third parameterisation rather than trust: it is a different implementation of the
+    DB-API, and it already differs from `sqlite3` in two ways this suite would
+    otherwise have discovered in production -- it raises `ValueError` rather than
+    `IntegrityError` on a constraint violation, and its cursors are not iterable.
+    """
     if request.param == "memory":
         yield InMemoryStore()
-    else:
+    elif request.param == "sqlite":
         s = SqliteStore(tmp_path / "repo.db")
+        yield s
+        s.close()
+    else:
+        s = SqliteStore.remote(str(tmp_path / "libsql.db"), "")
         yield s
         s.close()
 
@@ -193,3 +205,81 @@ def test_V30_a_conflicted_merge_writes_nothing(durable, base_schema):
     assert result.status is MergeStatus.CONFLICTED
     assert r.head("main").id == before_head
     assert r.commit_count() == before_count, "no orphan commit may be left behind"
+
+
+# ------------------------------------------------------- shared database (D51)
+def test_V31_two_workspaces_in_one_database_do_not_see_each_other(tmp_path,
+                                                                  base_schema):
+    """The deployed app puts every visitor in one database, partitioned by a column.
+
+    Before that, isolation was a filesystem fact -- separate files cannot leak into
+    one another. Now it is a `WHERE` clause, which can be forgotten, so it is tested
+    directly rather than trusted.
+    """
+    shared = tmp_path / "shared.db"
+    a = Repo.init("main", store=SqliteStore(shared, workspace="a" * 16))
+    b = Repo.init("main", store=SqliteStore(shared, workspace="b" * 16))
+
+    a.commit("main", base_schema, message="a's schema")
+    a.branch("only-in-a", "main")
+    b.commit("main", base_schema, message="b's schema")
+
+    assert a.branches() == ["main", "only-in-a"]
+    assert b.branches() == ["main"]
+    # Equal, and neither sees the other's: a shared table would show the sum.
+    assert a.store.commit_count() == b.store.commit_count()
+
+
+def test_V32_the_same_branch_name_in_two_workspaces_is_not_a_collision(tmp_path,
+                                                                       base_schema):
+    """`main` is the default branch, so every workspace has one. If the primary key
+    were the name alone, the second visitor to arrive would be refused a workspace."""
+    shared = tmp_path / "shared.db"
+    a = Repo.init("main", store=SqliteStore(shared, workspace="a" * 16))
+    a.commit("main", base_schema, message="first")
+
+    b = Repo.init("main", store=SqliteStore(shared, workspace="b" * 16))
+    b.commit("main", base_schema, message="second")
+
+    assert a.head("main") != b.head("main")
+
+
+def test_V33_moving_one_workspaces_head_leaves_the_others_alone(tmp_path, base_schema):
+    """The compare-and-swap is the one statement where a missing workspace clause
+    would be worst: it would let one visitor's commit move another visitor's branch."""
+    shared = tmp_path / "shared.db"
+    a = SqliteStore(shared, workspace="a" * 16)
+    b = SqliteStore(shared, workspace="b" * 16)
+    ra, rb = Repo.init("main", store=a), Repo.init("main", store=b)
+    ra.commit("main", base_schema, message="a")
+    rb.commit("main", base_schema, message="b")
+    before = b.branch_head("main")
+    # A real commit id: the composite foreign key refuses a head that is not one,
+    # which is itself the workspace scoping being enforced by the database.
+    ra.commit("main", base_schema.evolve().add_col("users", "a", "int").build(),
+              message="a again")
+    moved = a.branch_head("main")
+
+    assert moved != before
+    assert b.branch_head("main") == before
+
+
+def test_V34_every_statement_in_the_store_is_scoped_to_a_workspace():
+    """A source-level check, because the failure mode is a query written later.
+
+    One forgotten `workspace = ?` does not crash and does not fail any behavioural
+    test that uses a single workspace -- it quietly serves one visitor another's
+    schema. So the invariant is enforced over the source, the same way D5 is.
+    """
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parents[2]
+           / "src" / "schemavcs" / "storage" / "sqlite_store.py").read_text()
+
+    statements = re.findall(
+        r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"]*(?:"\s*"[^"]*)*)"', src)
+    assert statements, "no SQL found -- the pattern needs updating, not deleting"
+
+    unscoped = [s for s in statements if "workspace" not in s]
+    assert unscoped == [], f"statement is not workspace-scoped: {unscoped}"

@@ -66,7 +66,7 @@ verification
 [D24](#d24--structured-editor-scoped-to-exactly-the-operations-the-brief-enumerates) editor scope · [D26](#d26--what-is-deliberately-cut-consolidated) what is deliberately cut · [D41](#d41--the-tool-is-the-origin-of-the-schema-external-migration-histories-are-not-accepted) the tool is
 the origin of the schema
 
-**Storage and app** — [D8](#d8--live-migration-execution-lives-in-ci-not-in-the-product) CI verification · [D9](#d9--free-tier-deployment-one-container-ephemeral-disk-no-database-reversal) deployment ·
+**Storage and app** — [D8](#d8--live-migration-execution-lives-in-ci-not-in-the-product) CI verification · [D9](#d9--free-tier-deployment-one-container-ephemeral-disk-no-database-reversal) deployment · [D51](#d51--one-hosted-database-partitioned-by-workspace) hosted database ·
 [D10](#d10--the-apps-datastore-has-nothing-to-do-with-the-dialects-it-versions) datastore · [D12](#d12--conflicts-are-resolved-atomically-on-one-screen-no-persisted-mid-merge-state) atomic conflict resolution · [D25](#d25--optimistic-concurrency-on-branch-heads) optimistic
 concurrency · [D34](#d34--snapshots-are-persisted-as-opaque-json-blobs-not-normalized-into-tables) blob storage behind a `Store` seam
 
@@ -277,6 +277,13 @@ tier. That wasn't the motivation, but it's why the constraint in D9 was satisfia
 ---
 
 ## D9 — Free-tier deployment: one container, ephemeral disk, no database (reversal)
+
+> **Partly superseded by [D51](#d51--one-hosted-database-partitioned-by-workspace). The
+> storage half of this decision no longer holds:** schemas now live in a hosted database
+> and survive a restart. The reasoning below is left as written because it was sound on
+> its own terms and the thing that changed was a requirement, not an argument — the app
+> has to stay usable, with work intact, for a month of review rather than for one sitting.
+> Everything here about the container, the cold start and the health check still stands.
 
 **Decision.** A single Docker container on Render's free plan. No managed database, no
 persistent volume, no serverless functions. `render.yaml` is committed so the deployment is
@@ -1422,6 +1429,63 @@ comma-separated names, and the same criticism applies. A `<select multiple>` doe
 order, and order is significant for both (D4) — so the honest fix is a reorderable picker,
 which is real work. The server validates the names, so a typo is caught; just later than it
 should be.
+
+---
+
+## D51 — One hosted database, partitioned by workspace
+
+**Decision.** Every visitor's repo lives in one Turso (libSQL) database, with a
+`workspace` column in both tables and in every statement. The store is one
+implementation, not two: libSQL is a SQLite fork, so the same class talks to a local file
+in development and to a hosted database in production.
+
+**Alternatives.** (a) Keep one SQLite file per visitor and mount a persistent disk —
+unavailable on the free tiers that need no credit card, and it ties the app to a
+filesystem. (b) One hosted *database* per visitor, which Turso supports and which would
+preserve the existing shape exactly — rejected because creating one means calling a
+provisioning API on the landing page, so the front door acquires an external dependency
+that can be slow, rate-limited or down. (c) Neon Postgres, which needs no new dependency
+because `psycopg` is already vendored for the live-engine tests — rejected as the larger
+port: different placeholders, different upsert syntax, different integrity errors, all in
+the one file where a subtle change is most expensive.
+
+**Reasoning.** The constraint that moved was the deployment lifetime. A demo that is
+opened once can lose its state between sittings; a link sent to reviewers over a month
+cannot. Free tiers cannot mount a disk, so durability has to come from a network
+database — and the `Store` seam (D34) existed precisely so that this would be a change of
+one file rather than a change of design.
+
+Partitioning by column rather than by database is what keeps the front door free of an
+external call. It costs an isolation property: separate files could not leak into one
+another, and a `WHERE` clause can be forgotten. That is a real downgrade and it is
+mitigated by testing rather than by care — `V-31` to `V-33` assert that two workspaces in
+one database cannot see or move each other's branches, and `V-34` reads the source and
+fails if any statement in the store omits `workspace`. A forgotten scope does not crash
+and does not fail a single-workspace test; it quietly serves one visitor another's
+schema, which is exactly the kind of failure that needs a test rather than a comment.
+
+This does not make workspaces a security boundary, and D42 still applies: ids are
+unguessable, nothing is authenticated, and the deployment is a demo.
+
+**What it bought, beyond durability.** The store contract suite now runs against
+`sqlite3` and `libsql` both, which is what D34 claimed the seam was for and had never
+actually demonstrated. It paid for itself immediately, finding three differences that
+would otherwise have been found in production:
+
+- libSQL raises `ValueError`, not `IntegrityError`, on a constraint violation — so a
+  duplicate branch name would have been a 500 instead of "branch already exists".
+- Its cursors are not iterable, which `branch_names` relied on.
+- **Its default connection opens an implicit transaction and never commits it.** Every
+  write would have been discarded when the per-request connection closed. The app would
+  have started, served pages, accepted edits and persisted nothing.
+
+The third is the one that justifies the parameterisation on its own. Nothing in the
+happy-path web tests would have caught it, because within a single request the data is
+there; it disappears at close.
+
+**Cut.** Retention. Anonymous workspaces accumulate and nothing expires them. At a few KB
+per visitor against a 5GB free tier this is not a month-scale problem, and a cleanup pass
+is scheduled work — the one thing D9 has no way to run.
 
 ---
 

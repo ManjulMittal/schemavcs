@@ -12,7 +12,7 @@ cleanly. A name-keyed tool cannot express that at all.
 
 ```bash
 make dev      # creates .venv, installs the package and dev dependencies
-make test     # 422 tests, ~3 seconds, no database required
+make test     # 438 tests, ~4 seconds, no database required
 make serve    # the web app on http://localhost:8000
 ```
 
@@ -123,40 +123,50 @@ tool generate the migrations. It is not an adoption path for a legacy database.
 
 ## Deploying
 
-The app is a single container with no database to provision — schemas live in per-visitor
-SQLite files created at runtime.
+One container and one hosted database. Nothing else to provision — no queue, no worker,
+no object store.
 
 ```bash
 docker build -t schemavcs .
 docker run -p 8000:8000 schemavcs      # http://localhost:8000
 ```
 
-On [Render](https://render.com), `render.yaml` is a blueprint: point a new Blueprint
-instance at the repo and it reads the service definition from the file rather than from a
-sequence of dashboard clicks. The free plan needs no credit card and allows 750
-instance-hours a month, which one always-on service fits inside.
+With no configuration the app writes to a local SQLite file under `SCHEMAVCS_DATA`,
+which is what `make serve` uses. Set two environment variables and the same code talks to
+[Turso](https://turso.tech) instead:
 
-Two properties of the free tier shaped the setup, and neither is hidden:
+```bash
+export TURSO_DATABASE_URL="libsql://<your-db>.turso.io"
+export TURSO_AUTH_TOKEN="..."          # from `turso db tokens create <your-db>`
+```
 
-**The first request after idle is slow.** Free services are suspended after 15 minutes of
-inactivity and take about a minute to wake. There is no way around this that does not
-involve self-pinging, which Render treats as abnormal traffic and grounds for suspension —
-a dead link is worse than a slow one. So it is documented instead.
+Turso is libSQL — a SQLite fork — so this is one `Store` implementation, not two: same
+SQL, same `?` placeholders, same `rowcount` semantics for the compare-and-swap that the
+concurrency guarantee rests on. The store contract suite runs against `sqlite3` and
+`libsql` both, which is how two behavioural differences between them were found rather
+than deployed.
 
-**What is not preserved.** Free instances cannot mount a persistent disk, so `/data` is
-container-local and is lost on redeploy or spin-down. Within the life of an instance
-everything holds: every edit is a commit written to disk immediately (D44), the repo is
-reopened per request, and branches, merges and history survive across requests and across
-workers. What does not survive is the container. A returning visitor whose workspace is
-gone lands on a fresh demo rather than an error.
+### On Render
 
-That is a fit with the design rather than a compromise forced on it — workspaces are
-anonymous, per-visitor and throwaway by decision (D42), so there is nothing here whose loss
-matters. It is also why no managed database is provisioned: a free Postgres would expire 30
-days after creation, which is precisely the wrong property for a link someone else opens.
+`render.yaml` is a blueprint: point a new Blueprint instance at the repo and Render reads
+the service definition from the file rather than from a sequence of dashboard clicks. The
+free plan needs no card and allows 750 instance-hours a month, which one always-on service
+fits inside. `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are declared in the blueprint as
+`sync: false` — required, but supplied in the dashboard, because an auth token committed to
+a repo is a leaked credential.
 
-`/healthz` exists for the platform's health check because `/` is not idempotent — it mints
-a workspace and sets a cookie, so probing it would write a SQLite file per check.
+**Schemas persist.** Branches, merges, history and every commit live in Turso, so a
+redeploy, a restart or a spin-down loses nothing. That is the reason for the hosted
+database: the free tier cannot mount a persistent disk, so a container-local file would be
+erased roughly every time the service went idle.
+
+**The first request after idle is slow.** Free services suspend after 15 minutes of
+inactivity and take about a minute to wake. The only workaround is self-pinging, which
+Render treats as abnormal traffic and grounds for suspension — a dead link is worse than a
+slow one, so this is documented rather than defeated.
+
+`/healthz` exists for the platform's health check because `/` is not idempotent: it creates
+a workspace and sets a cookie, so probing it would write a new repo per check.
 
 ## Running the live-engine tests
 

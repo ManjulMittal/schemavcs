@@ -139,16 +139,22 @@ def test_W05_a_change_script_is_refused_with_the_boundary_message(client):
     assert "source of truth" in error(r.text)
 
 
-def test_W06_a_stale_cookie_recovers_instead_of_500ing(client, ws, data_dir):
-    """The deployed free tier restarts onto empty disk, so a cookie pointing at a
-    workspace that no longer exists is an ordinary event, not an edge case."""
-    workspaces.path_for(ws).unlink()
+def test_W06_a_stale_cookie_recovers_instead_of_500ing(client):
+    """A cookie outlives the workspace it names. It is set for 30 days, and the
+    database behind it can be reset, migrated or replaced in that time, so a cookie
+    pointing at a workspace that no longer exists is an ordinary event."""
+    stale = "0" * 16                               # well-formed, never created
+    client.cookies.clear()
+    client.cookies.set("schemavcs_ws", stale)
 
     r = client.get("/", follow_redirects=True)
 
     assert r.status_code == 200
-    assert client.cookies["schemavcs_ws"] != ws
+    # Asserted on the URL rather than the cookie jar: what matters is that the visitor
+    # was moved to a different, working workspace, and the landing path names it.
     assert r.url.path.endswith("/branch/main")
+    assert f"/w/{stale}/" not in str(r.url)
+    assert "users" in r.text
 
 
 def test_W07_workspaces_are_isolated(client, ws):
@@ -164,12 +170,13 @@ def test_W07_workspaces_are_isolated(client, ws):
 
 
 @pytest.mark.parametrize("bad", ["../../etc/passwd", "..", "x" * 40, "not-hex-at-all"])
-def test_W08_a_malformed_workspace_id_never_reaches_the_filesystem(bad):
-    """The id comes from a cookie, and a cookie is attacker-controlled input that gets
-    concatenated into a path."""
+def test_W08_a_malformed_workspace_id_is_refused_at_the_boundary(bad):
+    """The id comes from a cookie, which is attacker-controlled input that reaches
+    storage. It no longer names a file, so traversal is moot -- but it is still
+    refused before it is used, rather than relied on to be harmless."""
     assert not workspaces.is_valid(bad)
     with pytest.raises(ValueError):
-        workspaces.path_for(bad)
+        workspaces.store_for(bad)
 
 
 def test_W09_an_unknown_workspace_in_the_url_is_not_a_crash(client):
