@@ -275,7 +275,7 @@ def test_V34_every_statement_in_the_store_is_scoped_to_a_workspace():
     import re
 
     src = (pathlib.Path(__file__).resolve().parents[2]
-           / "src" / "schemavcs" / "storage" / "sqlite_store.py").read_text()
+           / "src" / "schemavcs" / "storage" / "sqlite_store.py").read_text(encoding="utf-8")
 
     statements = re.findall(
         r'"((?:SELECT|INSERT|UPDATE|DELETE)[^"]*(?:"\s*"[^"]*)*)"', src)

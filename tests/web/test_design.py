@@ -14,7 +14,7 @@ import re
 import pytest
 
 CSS = (pathlib.Path(__file__).resolve().parents[2]
-       / "src/schemavcs/web/static/app.css").read_text()
+       / "src/schemavcs/web/static/app.css").read_text(encoding="utf-8")
 
 
 def tokens() -> dict[str, str]:

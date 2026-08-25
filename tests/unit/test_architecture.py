@@ -20,7 +20,7 @@ def _code_lines(path: pathlib.Path):
 
     Prose is allowed to explain dialect behaviour; branching on it is not.
     """
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     in_doc, quote = False, ""
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw
@@ -100,3 +100,26 @@ def test_neutral_packages_do_not_import_the_storage_layer():
     assert not offenders, (
         "a neutral package imported the storage layer, reversing the dependency:\n  "
         + "\n  ".join(offenders))
+
+
+def test_every_file_read_names_its_encoding():
+    """`read_text()` without an encoding is a machine-dependent test.
+
+    Python resolves the default from the locale, so a file containing an em dash
+    decodes fine on a developer machine with a UTF-8 locale and raises
+    UnicodeDecodeError on a CI runner without one. Because two of these reads happen
+    at module level, the failure is a *collection* error -- the suite reports "1 error
+    during collection" and exit code 2, which looks nothing like the assertion failure
+    it actually is. That cost real time to find, so it is a test now.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    offenders = []
+    for path in list(root.joinpath("src").rglob("*.py")) + \
+            list(root.joinpath("tests").rglob("*.py")):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"\.read_text\(\s*\)|\.write_text\(\s*[^,)]*\s*\)$", line):
+                if "encoding=" not in line:
+                    offenders.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+    assert not offenders, (
+        "file read/written without an explicit encoding, so the result depends on the "
+        "machine's locale:\n  " + "\n  ".join(offenders))

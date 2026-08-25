@@ -75,7 +75,7 @@ def test_W01f_templates_carry_no_inline_styles_or_handlers():
     templates = pathlib.Path(__file__).resolve().parents[2] / "src/schemavcs/web/templates"
     offenders = []
     for path in templates.glob("*.html"):
-        for n, line in enumerate(path.read_text().splitlines(), 1):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if re.search(r'\sstyle="|\son[a-z]+="', line):
                 offenders.append(f"{path.name}:{n}: {line.strip()[:70]}")
 
