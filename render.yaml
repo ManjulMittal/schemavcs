@@ -7,6 +7,13 @@ services:
     plan: free                # 750 instance-hours/month; one service fits inside that
     dockerfilePath: ./Dockerfile
 
+    # Pinned to sit next to the database. Render's free regions do not include Mumbai,
+    # and Singapore is the closest to a Turso database in ap-south-1. Every page load is
+    # several round trips (D52), so this is not a rounding error: the same code against
+    # the same database from Oregon would pay a round-the-world trip 12 times to seed a
+    # workspace. Change this only together with the Turso region.
+    region: singapore
+
     # Not "/": the landing route creates a workspace and sets a cookie on every request
     # (D42/D46), so health checks against it would write a new repo per probe.
     healthCheckPath: /healthz
