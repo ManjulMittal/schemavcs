@@ -143,8 +143,19 @@ export TURSO_AUTH_TOKEN="..."          # from `turso db tokens create <your-db>`
 Turso is libSQL — a SQLite fork — so this is one `Store` implementation, not two: same
 SQL, same `?` placeholders, same `rowcount` semantics for the compare-and-swap that the
 concurrency guarantee rests on. The store contract suite runs against `sqlite3` and
-`libsql` both, which is how two behavioural differences between them were found rather
+`libsql` both, which is how three behavioural differences between them were found rather
 than deployed.
+
+The URL can be given with Turso's `turso://` scheme or with `libsql://` — the first is
+what the dashboard shows you and is not what the driver accepts, so it is rewritten
+rather than rejected.
+
+A hosted database also turns every store operation into a network round trip, which is a
+different cost model from a local file and needed three changes to accommodate: one
+connection per worker thread, an in-process cache of commits (safe without invalidation,
+because a commit is immutable), and assembling a new workspace in memory before writing
+it. That last one took seeding the demo from 48 statements to 12. D52 has the
+measurements.
 
 ### On Render
 

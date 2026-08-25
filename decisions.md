@@ -66,7 +66,7 @@ verification
 [D24](#d24--structured-editor-scoped-to-exactly-the-operations-the-brief-enumerates) editor scope · [D26](#d26--what-is-deliberately-cut-consolidated) what is deliberately cut · [D41](#d41--the-tool-is-the-origin-of-the-schema-external-migration-histories-are-not-accepted) the tool is
 the origin of the schema
 
-**Storage and app** — [D8](#d8--live-migration-execution-lives-in-ci-not-in-the-product) CI verification · [D9](#d9--free-tier-deployment-one-container-ephemeral-disk-no-database-reversal) deployment · [D51](#d51--one-hosted-database-partitioned-by-workspace) hosted database ·
+**Storage and app** — [D8](#d8--live-migration-execution-lives-in-ci-not-in-the-product) CI verification · [D9](#d9--free-tier-deployment-one-container-ephemeral-disk-no-database-reversal) deployment · [D51](#d51--one-hosted-database-partitioned-by-workspace) hosted database · [D52](#d52--a-remote-database-makes-round-trip-count-a-design-constraint) latency ·
 [D10](#d10--the-apps-datastore-has-nothing-to-do-with-the-dialects-it-versions) datastore · [D12](#d12--conflicts-are-resolved-atomically-on-one-screen-no-persisted-mid-merge-state) atomic conflict resolution · [D25](#d25--optimistic-concurrency-on-branch-heads) optimistic
 concurrency · [D34](#d34--snapshots-are-persisted-as-opaque-json-blobs-not-normalized-into-tables) blob storage behind a `Store` seam
 
@@ -1486,6 +1486,63 @@ there; it disappears at close.
 **Cut.** Retention. Anonymous workspaces accumulate and nothing expires them. At a few KB
 per visitor against a 5GB free tier this is not a month-scale problem, and a cleanup pass
 is scheduled work — the one thing D9 has no way to run.
+
+---
+
+## D52 — A remote database makes round-trip count a design constraint
+
+**Decision.** Three changes, all forced by measurement rather than anticipated: reuse one
+connection per worker thread, cache commits in-process, and assemble a new workspace in
+memory before writing it.
+
+**How it was found.** By pointing the deployed configuration at a real Turso database and
+timing it. The first measurement was the landing page at **10.2 seconds**. Every store
+operation is a network round trip -- about 140ms for a read and 325ms for a write from
+where this was measured -- and the code was written against a local file where an
+operation costs microseconds. Nothing was wrong with it; the cost model underneath it had
+changed.
+
+| | before | after |
+|---|---|---|
+| landing (seeds the demo) | 10.2s | 2.3s |
+| branch page | 1.7s | 0.66s |
+| compare | 1.2s | 0.51s |
+| merge | — | 0.28s |
+
+**What each change was worth, in order of being tried.**
+
+*Connection reuse* was the obvious suspect and the wrong one. A connection cost 0.67s to
+establish and the app opened two per request -- `exists()` then `open_repo()` -- so
+pooling them looked like the answer. It moved the branch page from 1.7s to 1.4s and left
+the landing page untouched. Worth keeping, but it disproved the theory: the cost was not
+connections, it was the number of statements.
+
+*Caching commits* was the real win, and it is free of risk because a commit is immutable:
+its id is a UUID minted once, and snapshots are never rewritten (D2). A cache that cannot
+go stale needs no invalidation. Branch page 1.4s to 0.66s. The cache is used only for
+remote stores -- a local file is already fast, and every in-process database shares the
+path `":memory:"`, so caching those would key two unrelated databases together.
+
+*Building in memory, then publishing* fixed the landing page. Seeding the demo through the
+normal commit path was 48 store operations, because every commit re-reads the branch head
+and compare-and-swaps it. That coordination is meaningless for a workspace that does not
+exist yet and has no concurrent writer, so the history is now assembled against an
+in-memory store and written once: 48 operations became 12, all of them inserts.
+
+**Alternatives that did not work.** libSQL *embedded replicas* -- a local file that syncs
+from the primary, so reads are local -- are exactly the right shape for this and the
+driver refuses to open one against a current Turso backend. `executemany` is not batched:
+12 rows took 3.38s versus 3.90s as separate statements, so there is no round-trip saving
+to have.
+
+**Honest caveat.** These numbers were measured from a laptop to a database in
+`ap-south-1`, and the deployed app will have a different distance to cover. The *counts*
+improve at any latency; the *seconds* will not reproduce. What the numbers are good for is
+the ordering of the three fixes, not their absolute values.
+
+**Cut.** Reducing the branch page below five operations. It needs a request-scoped cache
+for branch heads, which unlike commits are mutable, so it trades a clear correctness
+argument for a fraction of a second.
 
 ---
 

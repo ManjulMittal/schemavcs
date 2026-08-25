@@ -18,7 +18,7 @@ import secrets
 from pathlib import Path
 
 from ..dialects import parse_ddl
-from ..engine import Repo
+from ..engine import InMemoryStore, Repo
 from ..storage import SqliteStore
 
 DATA_DIR = Path(os.environ.get("SCHEMAVCS_DATA", "/tmp/schemavcs-workspaces"))
@@ -140,14 +140,42 @@ def seed_demo(repo: Repo) -> None:
             repo.commit(name, editor.build(), message=message)
 
 
+def _publish(scratch: Repo, target) -> None:
+    """Write a finished history into a store: commits first, then branches.
+
+    Commits before branches because a branch row's foreign keys point at them, and
+    oldest-first so that a reader following parents never sees a dangling one.
+    """
+    order, seen = [], set()
+    for name in scratch.branches():
+        for commit in scratch.history(name):        # newest first, breadth-first
+            if commit.id not in seen:
+                seen.add(commit.id)
+                order.append(commit)
+    for commit in reversed(order):
+        target.put_commit(commit)
+    for name in scratch.branches():
+        target.create_branch(name, scratch.store.branch_head(name),
+                             branch_point=scratch.store.branch_point(name))
+
+
 def create(ws: str | None = None, ddl: str | None = None, dialect: str = "postgres",
            *, demo: bool = False) -> str:
     """Create a workspace and seed it. Raises DDLError if the DDL will not parse --
-    deliberately, so a bad paste never produces a half-built workspace."""
+    deliberately, so a bad paste never produces a half-built workspace.
+
+    Built in memory and then published, rather than committed straight into the store.
+    Against a hosted database every operation is a network round trip, and seeding the
+    demo through the normal commit path is 33 of them -- each commit re-reads the branch
+    head and compare-and-swaps it. None of that coordination means anything for a
+    workspace that does not exist yet and has no concurrent writer, so the history is
+    assembled locally and written once: 12 statements instead of 33.
+    """
     snapshot = parse_ddl(ddl if ddl and ddl.strip() else SEED_DDL, dialect=dialect)
     ws = ws or new_id()
-    repo = Repo.init("main", store=store_for(ws))
-    repo.commit("main", snapshot, message="initial schema")
+    scratch = Repo.init("main", store=InMemoryStore())
+    scratch.commit("main", snapshot, message="initial schema")
     if demo:
-        seed_demo(repo)
+        seed_demo(scratch)
+    _publish(scratch, store_for(ws))
     return ws

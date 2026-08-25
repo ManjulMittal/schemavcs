@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 from ..engine.store import Commit
@@ -36,8 +38,72 @@ from ..model import Snapshot
 #: propagates rather than being silently retold as "branch already exists".
 INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError, ValueError)
 
-#: Remote databases whose schema statements have already been run in this process.
-_INITIALIZED: set[str] = set()
+#: Commits already read or written in this process, keyed by (database, workspace, id).
+#:
+#: Safe to cache and never invalidate, because a commit is immutable: its id is a UUID
+#: minted once when it is created, and nothing ever rewrites one. That is a property of
+#: the model (D2 -- commits store whole snapshots, so there is no later mutation to
+#: apply), not a convention this layer is choosing to rely on.
+#:
+#: It exists because a hosted database turns every read into a network round trip, and is
+#: used only for those: a local file is already fast, and every in-process database shares
+#: the path ":memory:", so caching them would key two unrelated databases together.
+_COMMITS: "OrderedDict[tuple[str, str, str], Commit]" = OrderedDict()
+_COMMIT_CACHE_MAX = 512
+
+
+def _cache_commit(key, commit: Commit) -> None:
+    _COMMITS[key] = commit
+    # Bounded, oldest out first: snapshots are the largest thing this process holds, and
+    # an unbounded cache in a long-lived server is a leak with extra steps.
+    while len(_COMMITS) > _COMMIT_CACHE_MAX:
+        _COMMITS.popitem(last=False)
+
+
+#: Turso's dashboard and CLI show a database URL as `turso://host`. The driver does not
+#: accept that scheme -- it falls through to "open a local file called turso://host" and
+#: fails with a message about a local database, which is a confusing way to learn that
+#: you copied the URL exactly as you were shown it. Rewriting it is friendlier than
+#: documenting it.
+_SCHEME_ALIASES = {"turso://": "libsql://"}
+
+
+def normalize_url(url: str) -> str:
+    for alias, real in _SCHEME_ALIASES.items():
+        if url.startswith(alias):
+            return real + url[len(alias):]
+    return url
+
+
+#: Live connections to remote databases, one per thread per database.
+#:
+#: A hosted database is a network hop, and this app opens a store more than once per
+#: request -- so connecting per store cost two TLS handshakes before any query ran, and
+#: made the landing page take ten seconds. Connections are therefore reused.
+#:
+#: Thread-local rather than a shared pool with a lock: uvicorn runs sync endpoints in a
+#: worker threadpool, and a libSQL connection is not safe to hand between threads. One
+#: connection per worker thread needs no locking and cannot interleave two requests
+#: mid-statement.
+_CONNECTIONS = threading.local()
+
+
+def _remote_connection(url: str, auth_token: str):
+    import libsql
+
+    cache = getattr(_CONNECTIONS, "by_url", None)
+    if cache is None:
+        cache = _CONNECTIONS.by_url = {}
+    db = cache.get(url)
+    if db is None:
+        # `isolation_level=None` is not a detail: libSQL's default opens an implicit
+        # transaction and never commits it, so every write is silently discarded when
+        # the connection closes. The sqlite3 path has always been autocommit; matching
+        # it is what makes the two drivers interchangeable rather than merely similar.
+        db = libsql.connect(url, auth_token=auth_token, isolation_level=None)
+        db.executescript(SCHEMA)
+        cache[url] = db
+    return db
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS commits (
@@ -72,6 +138,7 @@ class SqliteStore:
     def __init__(self, path: str | Path | None = None, *, workspace: str = ""):
         self.path = ":memory:" if path is None else str(path)
         self.workspace = workspace
+        self._shared = False
         self._db = sqlite3.connect(self.path, isolation_level=None)
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(SCHEMA)
@@ -83,29 +150,19 @@ class SqliteStore:
         The driver is imported here rather than at module scope so that importing the
         storage package never loads a native extension it may not use.
         """
-        import libsql
-
         self = cls.__new__(cls)
-        self.path = url
+        self.path = normalize_url(url)
         self.workspace = workspace
-        # `isolation_level=None` is not a detail: libSQL's default opens an implicit
-        # transaction and never commits it, so every write is silently discarded when
-        # the connection closes -- and a connection closes at the end of every request.
-        # The sqlite3 path has always passed this; matching it is what makes the two
-        # drivers interchangeable rather than merely similar.
-        self._db = libsql.connect(url, auth_token=auth_token, isolation_level=None)
-        # A connection is opened per request, and the schema statements are a network
-        # round trip each -- so they run once per process per database rather than on
-        # every request. Deliberately not applied to local stores: `:memory:` is a new
-        # empty database on every connect, so skipping its setup would leave it
-        # tableless.
-        if url not in _INITIALIZED:
-            self._db.executescript(SCHEMA)
-            _INITIALIZED.add(url)
+        self._shared = True
+        self._db = _remote_connection(self.path, auth_token)
         return self
 
     def close(self) -> None:
-        self._db.close()
+        # A pooled connection outlives the store that borrowed it: closing it here
+        # would break the next request on this thread, and there is nothing to flush
+        # because every statement is already committed.
+        if not self._shared:
+            self._db.close()
 
     def __enter__(self) -> "SqliteStore":
         return self
@@ -114,22 +171,36 @@ class SqliteStore:
         self.close()
 
     # ------------------------------------------------------------ commits
+    def _key(self, commit_id: str) -> tuple[str, str, str]:
+        return (self.path, self.workspace, commit_id)
+
     def put_commit(self, commit: Commit) -> None:
         self._db.execute(
             "INSERT OR REPLACE INTO commits (workspace, id, parents, message, snapshot) "
             "VALUES (?, ?, ?, ?, ?)",
             (self.workspace, commit.id, json.dumps(list(commit.parents)),
              commit.message, json.dumps(commit.snapshot.to_dict())))
+        # Write-through: a commit is almost always read back immediately -- the merge
+        # that just wrote it needs its parents -- and seeding the demo wrote seven
+        # commits and then read fifteen.
+        if self._shared:
+            _cache_commit(self._key(commit.id), commit)
 
     def get_commit(self, commit_id: str) -> Commit:
+        key = self._key(commit_id)
+        if self._shared and (cached := _COMMITS.get(key)) is not None:
+            return cached
         row = self._db.execute(
             "SELECT id, parents, message, snapshot FROM commits "
             "WHERE workspace = ? AND id = ?",
             (self.workspace, commit_id)).fetchone()
         if row is None:
             raise KeyError(f"no such commit: {commit_id}")
-        return Commit(id=row[0], parents=tuple(json.loads(row[1])), message=row[2],
-                      snapshot=Snapshot.from_dict(json.loads(row[3])))
+        commit = Commit(id=row[0], parents=tuple(json.loads(row[1])), message=row[2],
+                        snapshot=Snapshot.from_dict(json.loads(row[3])))
+        if self._shared:
+            _cache_commit(key, commit)
+        return commit
 
     def commit_count(self) -> int:
         return self._db.execute(
