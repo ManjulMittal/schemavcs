@@ -194,9 +194,16 @@ path.
 
 ## D6 — The canonical type model is a superset with per-dialect representability, not a lowest common denominator
 
+> **The second half of this was reversed by [D39](#d39--constructs-a-target-engine-cannot-express-are-refused-never-approximated).**
+> There is no representability *report* and no flagged approximation: emitting something a
+> target engine cannot express raises `UnrepresentableError` and names what it was, which
+> is a third option this entry did not consider. The first half — a superset canonical
+> model with per-dialect declarations — is what shipped. Left in place because the
+> reasoning below is why the superset was chosen, and that still holds.
+
 **Decision.** The canonical model can express constructs that not every dialect supports.
 Each dialect adapter declares what it can represent. Emitting something a target dialect
-can't express produces a *report*, not a crash and not a silent substitution.
+can't express is a first-class outcome rather than a crash or a silent substitution.
 
 **Alternatives.** Restrict the canonical model to the intersection of all supported
 dialects.
@@ -207,9 +214,10 @@ it excludes most of what's actually in a production schema. A schema VCS that ca
 represent your schema is not a schema VCS.
 
 The interesting consequence is that "unrepresentable" becomes a first-class result. MySQL
-`UNSIGNED INT` emitted to Postgres has no equivalent type; the honest output is the closest
-substitution (`integer` plus `CHECK (col >= 0)`) *flagged as an approximation*, rather than
-a silent downgrade.
+`UNSIGNED INT` emitted to Postgres has no equivalent type. The plan at this point was the
+closest substitution (`integer` plus `CHECK (col >= 0)`) *flagged as an approximation*
+rather than a silent downgrade; D39 later concluded that a flag nobody is forced to read is
+not meaningfully different from a silent downgrade, and refuses instead.
 
 This is also where the real difficulty of multi-dialect schema tooling lives, and it is
 worth being concrete: MySQL accepts `BOOLEAN` but stores it as `TINYINT(1)`, which does not
@@ -618,6 +626,22 @@ search-path manipulation — an unbounded surface with no natural stopping point
 ---
 
 ## D22 — Rename inference on import is heuristic plus human confirmation, never silent
+
+> **Not built, and made unnecessary by [D41](#d41--the-tool-is-the-origin-of-the-schema-external-migration-histories-are-not-accepted).**
+> There is no confidence-scored rename proposal anywhere in the code. What shipped is the
+> deterministic half only: `align_identity` adopts identity for objects that match by name
+> and refuses to guess past that, which `test_a_renamed_column_is_NOT_inferred_as_a_rename`
+> pins deliberately.
+>
+> The reason is that D41 removed the flow this was for. Inference is needed when you
+> re-import an *evolved* external schema and have to work out what happened to it. D41
+> decided the tool is the origin of the schema: you import once to bootstrap, then evolve
+> inside it, where a rename is an explicit operation on a stable id and there is nothing to
+> infer. The ambiguous input this entry was designed for stopped arriving.
+>
+> Left in place rather than deleted because the reasoning is still the argument for why
+> `align.py` stops where it does — and because "never cut" appeared next to this in the cut
+> order, which was wrong and is corrected there.
 
 **Decision.** Pasted DDL has no object identity, so identity must be reconstructed by
 matching against the previous snapshot. Name matching handles the easy cases; where a
@@ -1556,17 +1580,34 @@ argument for a fraction of a second.
 
 ## Open risks
 
-| Risk | Mitigation |
+Rewritten at the end of the build. The original table was a *pre-build* register — "verify
+day one", "failure means replanning the same day" — and every forward-looking row in it
+resolved: the sqlglot gate passed with four things we then owned (D28), the frontend did not
+crush the docs or the deploy, and the free-tier terms were verified against a live
+deployment rather than from memory. Nothing was cut from the pre-committed order below
+except the third dialect: MySQL ingest shipped, and so did the editor breadth.
+
+What follows is what is actually still wrong or unfinished.
+
+| Open | Detail |
 |---|---|
-| sqlglot round-trips `CREATE TABLE` but loses fidelity on constraints, defaults or index definitions | Day-one spike (D28), before the model is built — gated specifically on `P-01` + `P-23`, not "does sqlglot parse SQL". Failure means replanning the same day, not on day three. |
-| Frontend overruns and compresses deploy/docs | Pre-committed cut order (below) so the decision isn't improvised under pressure. |
-| Free-tier terms have changed | Verify day one. Architecture is vendor-independent. |
-| Conflict taxonomy grows past five | Treated as evidence of a modeling error, investigated rather than patched. |
-| MySQL `lower_case_table_names` differs between the dev machine (macOS default 2) and the CI container (Linux default 0), and can only be set at server init | Pin it explicitly in the Docker fixture; `P-34b` asserts canonical folding is applied regardless of the server setting. |
+| **Quoted mixed-case identifiers are not supported** | Postgres treats `"Users"` and `users` as two tables; this folds both to `users`, so a schema declaring both is **refused at import** as a duplicate. It fails loudly rather than silently merging them, which is the right failure — but it is a real schema this tool cannot read. |
+| **Ordered column lists are free text** | Indexes and foreign keys still take comma-separated column names typed by hand (D50). Order is significant and `<select multiple>` does not preserve it, so the honest fix is a reorderable picker. Names are validated server-side, so a typo is caught — later than it should be. |
+| **Container and database are 3,900km apart** | Every page is several round trips (D52). Render's free tier has no region near `ap-south-1`, so the fix is to move the database to `ap-southeast-1`, not the app. Measured, quantified, not done. |
+| **First request after idle takes ~60s** | The free instance suspends after 15 minutes. Not mitigable — self-pinging is grounds for suspension — so it is stated at the top of the README instead (D9). |
+| **A vanished workspace resets silently** | If the database is reset or a cookie outlives its workspace, the visitor lands on a fresh demo with no explanation, which reads as lost work rather than an expired session (D42). About ten lines to fix and still the one I would do next. |
+| **Nothing expires workspaces** | Anonymous workspaces accumulate forever (D51). Not a month-scale problem at a few KB each against 5GB, but there is no cleanup and nowhere to run one. |
+| Conflict taxonomy grows past five | Standing invariant: treated as evidence of a modeling error, investigated rather than patched. |
+| MySQL `lower_case_table_names` differs between macOS (default 2) and Linux CI (default 0), and can only be set at server init | Pinned explicitly in the Docker fixture; `P-34b` asserts canonical folding is applied regardless of the server setting. |
 
 **Pre-committed cut order**, from the bottom: third dialect (already gone) → MySQL
 *ingest*, keeping the MySQL emitter since that's what proves the core is neutral →
 structured editor breadth → branch graph.
 
 Never cut: identity-based diff, three-way attribute merge, post-merge integrity
-validation, merge-base computation, rename inference, round-trip verification.
+validation, merge-base computation, round-trip verification.
+
+**Rename inference was on that list and did not ship** (D22). Not as a schedule casualty:
+D41 decided the tool is the origin of the schema, which removed the flow inference existed
+to serve. Recorded here rather than quietly dropped from the list, because a "never cut"
+item going missing is exactly the kind of thing this document is supposed to catch.

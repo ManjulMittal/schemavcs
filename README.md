@@ -20,7 +20,7 @@ cleanly. A name-keyed tool cannot express that at all.
 
 ```bash
 make dev      # creates .venv, installs the package and dev dependencies
-make test     # 438 tests, ~4 seconds, no database required
+make test     # 441 tests, ~3 seconds, no database required
 make serve    # the web app on http://localhost:8000
 ```
 
@@ -245,8 +245,8 @@ src/schemavcs/
   web/        FastAPI + Jinja, no build step, no external assets.
               Decides nothing (D45); tokenised design system (D47).
 tests/
-  unit/       335 tests, no database
-  web/        77 tests: the HTTP layer (cookies, forms, redirects, staleness,
+  unit/       359 tests, no database
+  web/        82 tests: the HTTP layer (cookies, forms, redirects, staleness,
               response headers) and the stylesheet's contrast contract
   engine/     generated DDL applied to real Postgres and MySQL
 docs/         scope, and the full test plan behind the test IDs (M-01, E-40, ...)
